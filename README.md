@@ -1,6 +1,6 @@
 # Cooperage SDK
 
-Lightweight helpers for writing [Cooperage](https://github.com/cooperage-io/cooperage)-compatible MCP servers.
+Lightweight helpers for building tools that run on [Cooperage](https://github.com/cooperage-io/cooperage).
 
 ## Install
 
@@ -8,7 +8,11 @@ Lightweight helpers for writing [Cooperage](https://github.com/cooperage-io/coop
 pip install cooperage-sdk
 ```
 
-## Usage
+## Two ways to build tools
+
+### Option A: Write a full server (maximum control)
+
+Use the SDK to build a Docker image with custom tools. You get full control over dependencies, runtime, and behavior.
 
 ```python
 from mcp.server.fastmcp import FastMCP
@@ -23,18 +27,71 @@ def process_data(input_file: str, output_file: str) -> str:
     workspace.path(output_file).write_text(data.upper())
     return f"Processed {input_file} → {output_file}"
 
-register_docs(mcp)  # expose docs/ directory as MCP Resources
+register_docs(mcp)
 serve(mcp)
 ```
+
+Package in a Dockerfile, register with `cooperage register --name my-server --image my-server:latest`.
+
+### Option B: Write a function, skip the Docker image
+
+Write plain Python functions that use the SDK's workspace helpers, then register them with a YAML config. Cooperage wraps them automatically — no Dockerfile, no MCP boilerplate.
+
+```python
+# tools.py
+from cooperage_sdk import workspace
+
+def analyze_csv(input_path: str) -> str:
+    """Analyze a CSV file from the workspace."""
+    import pandas as pd
+    df = pd.read_csv(workspace.path(input_path))
+    summary = df.describe().to_json()
+    workspace.path("summary.json").write_text(summary)
+    return "Summary written to /workspace/summary.json"
+
+def merge_files(file_a: str, file_b: str) -> str:
+    """Merge two workspace files."""
+    a = workspace.path(file_a).read_text()
+    b = workspace.path(file_b).read_text()
+    workspace.path("merged.txt").write_text(a + "\n" + b)
+    return "Merged to /workspace/merged.txt"
+```
+
+```yaml
+# tools.yaml
+name: my-tools
+type: python
+source: /workspace/tools.py
+python_tools:
+  - name: analyze_csv
+    function: analyze_csv
+    description: Analyze a CSV file
+    params:
+      input_path: {type: string, description: "Path to CSV in workspace"}
+  - name: merge_files
+    function: merge_files
+    description: Merge two text files
+    params:
+      file_a: {type: string}
+      file_b: {type: string}
+```
+
+```bash
+cooperage register --from tools.yaml
+```
+
+The SDK's `workspace` helper works in both modes — whether your code runs in a custom Docker image or inside the adapter container.
 
 ## API
 
 ### workspace
 
+Safe interface to the shared `/workspace` volume. Handles path resolution, traversal protection, and the `COOPERAGE_WORKSPACE` env var.
+
 ```python
 from cooperage_sdk import workspace
 
-# Get safe paths — blocks traversal, hides the env var
+# Get safe paths
 workspace.path("file.txt")              # returns a Path
 workspace.path("file.txt").read_text()  # read
 workspace.path("out.txt").write_text()  # write
@@ -53,6 +110,8 @@ workspace.root                          # raw Path to /workspace
 
 ### serve
 
+Start the MCP server. Reads `PORT` from the environment (default 8000).
+
 ```python
 from cooperage_sdk import serve
 
@@ -62,8 +121,7 @@ serve(mcp, port=9000)                   # custom port
 
 ### register_docs
 
-Expose a `docs/` directory as MCP Resources so the LLM can discover and read
-server documentation on demand.
+Expose a `docs/` directory as MCP Resources so the LLM can discover and read server documentation on demand.
 
 ```python
 from cooperage_sdk import register_docs
@@ -72,39 +130,7 @@ register_docs(mcp)              # scans docs/ directory (default)
 register_docs(mcp, "manuals")   # custom directory
 ```
 
-Each file in the directory becomes an MCP Resource:
-- **URI**: `docs://<filename>` (e.g. `docs://quickstart.md`)
-- **Name**: derived from filename (e.g. "Quickstart")
-- **Description**: first line of the file — lets the LLM preview contents
-  before reading
-
-#### Example
-
-```
-my-server/
-  server.py
-  Dockerfile
-  docs/
-    quickstart.md          "Getting started with the image analyzer"
-    scene-types.md         "Supported scene types: terrain, urban, coastal"
-    api-reference.md       "Full API reference for all tools"
-```
-
-The LLM sees:
-```
-cooperage_list_server_resources("session-1", "my-server")
-→ [
-    {"uri": "docs://quickstart.md",     "name": "Quickstart",     "description": "Getting started with the image analyzer"},
-    {"uri": "docs://scene-types.md",    "name": "Scene Types",    "description": "Supported scene types: terrain, urban, coastal"},
-    {"uri": "docs://api-reference.md",  "name": "Api Reference",  "description": "Full API reference for all tools"},
-  ]
-
-cooperage_read_server_resource("session-1", "my-server", "docs://scene-types.md")
-→ (full markdown content)
-```
-
-The LLM reads the descriptions, decides which docs are relevant, and only
-pulls what it needs — no wasted context tokens.
+Each file becomes an MCP Resource with a `docs://` URI. The LLM reads descriptions first and only pulls what it needs — no wasted context.
 
 ## License
 
