@@ -18,7 +18,7 @@ Usage:
 """
 
 from cooperage_sdk.workspace import workspace
-from cooperage_sdk.server import serve
+from cooperage_sdk.server import serve, serve_functions
 from cooperage_sdk.docs import register_docs
 
-__all__ = ["workspace", "serve", "register_docs"]
+__all__ = ["workspace", "serve", "serve_functions", "register_docs"]
